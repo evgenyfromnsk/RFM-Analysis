@@ -1,0 +1,186 @@
+DROP TABLE IF EXISTS sandbox.rfm_new_20250930;
+create table sandbox.rfm_new_20250930 as
+
+WITH user_date_bounds AS (
+    SELECT 
+        email,
+        date_trunc('month', MIN(datevalue))::date AS min_month,
+        date_trunc('month', CURRENT_DATE)::date AS max_month
+    FROM sales_data_new
+--    where datevalue>'2025-01-01'
+    GROUP BY email
+),
+
+--генерация календарбя по каждому email
+calendar AS (
+    SELECT 
+        email,
+        generate_series(min_month, max_month, INTERVAL '1 month')::date AS mth
+    FROM user_date_bounds
+
+)
+
+-- данные с sdn
+,groupped_t as (
+select date_trunc('month',datevalue)::date mth, 
+       datevalue,
+       email, 
+       reference_number,
+       case when country in ('United States','United States of America') then 'United States' else country end country,
+       max(medium_group) medium_group,
+       sum(gt_usd_all) gt_usd_all,
+       array_agg(productgroup) productgroup
+from  sales_data_new
+where order_status !='REFUND'
+group by 1,2,3,4,5
+)
+
+, t2 as (
+select mth, 
+       lag(datevalue) over (partition by email order by datevalue) prev_date,
+       datevalue,
+       email, 
+       reference_number,
+       country,
+       medium_group,
+       gt_usd_all,
+       productgroup,
+       row_number () over (partition by email order by datevalue) frequency,  --rank_number ?
+       sum(gt_usd_all) over (partition by email order by datevalue) monetary
+
+from groupped_t
+where true 
+)
+
+--джойню с календарем, чтобы были все месяца
+, joined as (
+select c.email,
+       c.mth,
+       t.prev_date,
+       t.datevalue,
+       t.reference_number,
+       t.country,
+       t.medium_group,
+       t.productgroup,
+       t.frequency,
+       t.monetary,
+       case when t.reference_number is not null then 1 else 0 end flag
+from calendar c left join t2 t on c.email=t.email and c.mth=t.mth
+)
+
+
+-- прокидываю флаг для транзакций
+, joined_with_flag as (
+select email,
+       mth,
+       prev_date,
+       datevalue,
+       reference_number,
+       country,
+       medium_group,
+       productgroup,
+       frequency,
+       monetary,
+       sum(flag) over (partition by email order by mth) part
+from joined
+)
+
+, joined_with_part as (
+select email,
+       mth,
+       prev_date,
+       datevalue,
+       reference_number,
+       frequency,
+       monetary,
+       part,
+       max(productgroup) over (partition by email, part) productgroup,
+       max(country) over (partition by email) country,
+       max(medium_group) over (partition by email) medium_group ,
+       max(monetary) over (partition by email, part) monetary2,
+       max(datevalue) over (partition by email, part) prev_date2,
+       part frequency2
+--       case when reference_number is not null then datevalue - prev_date else mth - max(datevalue) over (partition by email, part) end recency
+from joined_with_flag
+)
+
+
+, final_t as (
+select email,
+       mth,
+--       prev_date,
+       datevalue,
+       reference_number,
+       country,
+       medium_group,
+       productgroup,
+--       frequency frequency_old,
+--       monetary monetary_old,
+--       part,
+       monetary2 monetary,
+--       prev_date2,
+       frequency2 frequency,
+--       case when reference_number is not null then coalesce(datevalue - prev_date,0) else mth - prev_date2 end recency
+       case when reference_number is not null then 0 else mth - prev_date2 end recency
+from joined_with_part
+)
+
+,scored AS (
+  SELECT *,
+    ntile(3) OVER (PARTITION BY mth ORDER BY recency DESC) AS recency_score,
+ --   ntile(3) OVER (PARTITION BY mth ORDER BY monetary ASC) AS monetary_score,
+    percent_rank() OVER (PARTITION BY mth ORDER BY frequency ASC) AS freq_percentile,
+    percent_rank() OVER (PARTITION BY mth ORDER BY monetary ASC) AS monetary_percentile
+  FROM final_t
+)
+
+,scored2 AS (
+  SELECT *,
+         CASE
+             WHEN freq_percentile <=  0.4 THEN 1
+             WHEN freq_percentile <= 0.8 THEN 2
+             ELSE 3
+         END AS frequency_score,
+          CASE
+             WHEN monetary_percentile <=  0.4 THEN 1
+             WHEN monetary_percentile <= 0.8 THEN 2
+             ELSE 3
+         END AS monetary_score
+         
+  FROM scored
+)
+
+
+,scored_with_segments AS (
+  SELECT *,
+         concat(recency_score, frequency_score, monetary_score) AS rfm_code,
+         round((recency_score + frequency_score + monetary_score)::numeric / 3, 2) AS rfm_score,
+CASE 
+    WHEN recency_score = 3 AND frequency_score = 3 AND monetary_score = 3 THEN 'Best Customers'
+    WHEN recency_score = 3 AND frequency_score >= 2 THEN 'Potential Loyalists'
+    WHEN frequency_score = 3 AND recency_score >= 2 THEN 'Loyal Customers'
+    WHEN monetary_score = 3 AND recency_score >= 2 THEN 'Big Spenders'
+
+    -- Отваливающиеся и неактивные
+    WHEN recency_score = 1 AND frequency_score = 1 AND monetary_score = 1 THEN 'Lost'
+    WHEN recency_score = 1 AND frequency_score <= 2 AND monetary_score > 1 THEN 'At Risk'
+    WHEN recency_score = 2 AND frequency_score = 1 THEN 'About To Sleep'
+    WHEN recency_score = 2 AND frequency_score = 2 THEN 'Need Attention'
+
+    -- Новые
+--    WHEN recency_score = 3 AND frequency_score = 1 AND monetary_score = 1 THEN 'New Customers'
+    WHEN recency_score = 3 AND frequency_score = 1 THEN 'New Customers'
+    WHEN recency_score = 3 AND frequency_score = 2 AND monetary_score = 2 THEN 'Promising'
+
+    ELSE 'Others'
+END AS rfm_segment
+   FROM scored2
+)
+
+SELECT email, mth, datevalue, reference_number, productgroup,country,medium_group,
+       recency,frequency, monetary,
+       recency_score, frequency_score, monetary_score,
+       rfm_code, rfm_score, rfm_segment
+FROM scored_with_segments
+ORDER BY email, mth;
+
