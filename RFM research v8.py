@@ -21,12 +21,6 @@ from itertools import tee
 from collections import defaultdict
 
 
-# In[2]:
-
-
-conn = psycopg2.connect(user="stat", password='NdwZeukx7xAN6DRMSUY', host="dwh-db-01.core.movavi.com", port="5432", database="stat")
-
-
 # In[3]:
 
 
@@ -378,16 +372,6 @@ plt.show()
 
 # # Динамика RFM сегментов по месяцам
 
-# In[14]:
-
-
-conn = psycopg2.connect(user="stat", password='NdwZeukx7xAN6DRMSUY', host="dwh-db-01.core.movavi.com", port="5432", database="stat")
-query_agg = """
-select mth, rfm_segment, count(distinct email) emails
-from sandbox.rfm_new_20250930
-where true
-group by 1,2
-"""
 
 
 # In[15]:
@@ -451,7 +435,6 @@ plt.show()
 # In[18]:
 
 
-conn = psycopg2.connect(user="stat", password='NdwZeukx7xAN6DRMSUY', host="dwh-db-01.core.movavi.com", port="5432", database="stat")
 query4 = """
 WITH rfm_data AS (
     SELECT 
@@ -520,10 +503,6 @@ ORDER BY t.prev_segment, percentage DESC
 
 
 # In[19]:
-
-
-df_4 = sqlio.read_sql_query(query4,conn)
-conn.close()
 
 
 # In[20]:
@@ -654,10 +633,7 @@ fig.show()
 
 # # Как становятся Best Customers
 
-# In[22]:
 
-
-conn = psycopg2.connect(user="stat", password='NdwZeukx7xAN6DRMSUY', host="dwh-db-01.core.movavi.com", port="5432", database="stat")
 query5 = """
 
 with best as  (
@@ -756,10 +732,7 @@ plt.show()
 
 # # Количество месяцев до перехода New -> Best
 
-# In[39]:
 
-
-conn = psycopg2.connect(user="stat", password='NdwZeukx7xAN6DRMSUY', host="dwh-db-01.core.movavi.com", port="5432", database="stat")
 query6 = """
 WITH segment_data AS (
     SELECT
@@ -882,8 +855,6 @@ plt.show()
 
 # In[30]:
 
-
-conn = psycopg2.connect(user="stat", password='NdwZeukx7xAN6DRMSUY', host="dwh-db-01.core.movavi.com", port="5432", database="stat")
 query8 = """
 WITH source AS (
     SELECT 
@@ -992,10 +963,7 @@ plt.show()
 
 # ## PPC Cohort to Best
 
-# In[33]:
 
-
-conn = psycopg2.connect(user="stat", password='NdwZeukx7xAN6DRMSUY', host="dwh-db-01.core.movavi.com", port="5432", database="stat")
 query8_ppc = """
 
 WITH source AS (
@@ -1105,16 +1073,7 @@ plt.tight_layout()
 plt.show()
 
 
-# In[ ]:
 
-
-
-
-
-# In[36]:
-
-
-conn = psycopg2.connect(user="stat", password='NdwZeukx7xAN6DRMSUY', host="dwh-db-01.core.movavi.com", port="5432", database="stat")
 query10 = """
 WITH first_start AS (
     SELECT DISTINCT ON (email)
